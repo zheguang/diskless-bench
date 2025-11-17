@@ -1,0 +1,16 @@
+name: kafka-local
+driverClass: io.openmessaging.benchmark.driver.kafka.KafkaBenchmarkDriver
+
+# Topic
+replicationFactor: 1
+
+topicConfig: ""
+
+# Base for admin, consumers and producers
+commonConfig: |
+  bootstrap.servers=localhost:9092
+
+producerConfig: ""
+
+consumerConfig: |
+  auto.offset.reset=earliest

@@ -1,0 +1,21 @@
+name: fixed-1MiB-1t10p-1P1x1C
+
+# Duration
+warmupDurationMinutes: 1
+testDurationMinutes: 5
+
+# Topic topology
+topics: 1
+partitionsPerTopic: 10
+
+# Throughput
+producerRate: 1024
+messageSize: 1024
+payloadFile: "payload/payload-1Kb.data"
+
+# Producers
+producersPerTopic: 1
+
+# Consumers
+subscriptionsPerTopic: 1
+consumerPerSubscription: 1
