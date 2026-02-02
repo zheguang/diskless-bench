@@ -39,7 +39,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
 - Brokers: 6 brokers (m8g.4xlarge instances)
 - Kafka version: 4.0 with Inkless implementation
 - JVM heap: Not specified (using Aiven managed defaults)
-- OS: Amazon Linux (Aiven managed)
+- OS: Amazon Linux
 - Instance type: m8g.4xlarge (16 vCPUs, 64 GiB memory)
 
 **Storage Configuration (AWS Baseline):**
@@ -47,7 +47,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
   - Capacity: 3600 GiB (1 hour of data at 1 GiB/s ingress)
   - Region: Multi-AZ (3 availability zones)
   - Storage class: Standard
-- Metadata store: Aiven PostgreSQL (i3.2xlarge, dual-AZ, 1.9TB NVMe)
+- Metadata store: PostgreSQL (i3.2xlarge, dual-AZ, 1.9TB NVMe)
 - Network: Cross-AZ traffic for metadata operations
 - Workload: 1 GiB/s in, 3 GiB/s out (fan-out pattern)
 
