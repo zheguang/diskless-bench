@@ -20,7 +20,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
 
 **Producer Configuration:**
 - Number of producers: 3 (one per AZ)
-- Throughput target: 1 GiB/s total (333 MB/s per producer)
+- Throughput target: 1 GiB/s total (333 MiB/s per producer)
 - Acks: all
 - Linger.ms: 100
 - Batch.size: 1048576 (1 MiB)
@@ -30,7 +30,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
 **Consumer Configuration:**
 - Number of consumers: 6 (two per AZ)
 - Consumer groups: 3 groups
-- Throughput target: 3 GiB/s total (500 MB/s per consumer)
+- Throughput target: 3 GiB/s total (500 MiB/s per consumer)
 - Fetch.max.bytes: 67108864 (64 MiB)
 - Fetch.max.wait.ms: 500
 - Fetch.min.bytes: 4194304 (4 MiB)
@@ -38,7 +38,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
 **Cluster Setup:**
 - Brokers: 6 brokers (m8g.4xlarge instances)
 - Kafka version: 4.0 with Inkless implementation
-- JVM heap: Not specified (using Aiven managed defaults)
+- JVM heap: 75% of instance memory, i.e., 48GiB
 - OS: Amazon Linux
 - Instance type: m8g.4xlarge (16 vCPUs, 64 GiB memory)
 
@@ -47,7 +47,7 @@ The baseline scenario is based on the benchmark documented in [Aiven's blog post
   - Capacity: 3600 GiB (1 hour of data at 1 GiB/s ingress)
   - Region: Multi-AZ (3 availability zones)
   - Storage class: Standard
-- Metadata store: PostgreSQL (i3.2xlarge, dual-AZ, 1.9TB NVMe)
+- Metadata store: PostgreSQL (i3.2xlarge, dual-AZ, 1.9TiB NVMe)
 - Network: Cross-AZ traffic for metadata operations
 - Workload: 1 GiB/s in, 3 GiB/s out (fan-out pattern)
 
@@ -67,7 +67,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
 - **Cluster**: 6 brokers (m8g.4xlarge equivalent)
 - **FSxN Configuration**:
   - Storage capacity: 3600 GiB SSD (matching S3 baseline - 1 hour of data at 1 GiB/s ingress)
-  - Throughput capacity: 2048 MB/s (2 GiB/s - accounting for workload + FSxN overhead)
+  - Throughput capacity: 2048 MiB/s (2 GiB/s - accounting for workload + FSxN overhead)
   - SSD IOPS: 16,000 (automatically provisioned with storage)
   - Protocol: NFSv4.1 with nconnect (4 connections)
   - Deployment type: MULTI_AZ_1 (first-generation Multi-AZ)
@@ -84,7 +84,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
 - **Expected**: Direct performance comparison to AWS S3 baseline
 - **Rationale**: 
   - Storage capacity matches S3 baseline exactly (3600 GiB SSD)
-  - Throughput capacity of 2 GiB/s (2048 MB/s) is calculated as:
+  - Throughput capacity of 2 GiB/s (2048 MiB/s) is calculated as:
     - **Base workload**: 1 GiB/s write + 3 GiB/s read = 4 GiB/s total I/O
     - **Caching benefit**: FSxN's NVMe and in-memory caching can serve ~50% of reads from cache
     - **Effective storage I/O**: 1 GiB/s write + 1.5 GiB/s read (50% cache hit) = 2.5 GiB/s
@@ -100,7 +100,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
 - **Cluster**: 6 brokers (m8g.4xlarge equivalent)
 - **FSxN Configuration**:
   - Storage capacity: 4096 GiB SSD (increased for better caching)
-  - Throughput capacity: 4096 MB/s (4 GiB/s - 2x Configuration A)
+  - Throughput capacity: 4096 MiB/s (4 GiB/s - 2x Configuration A)
   - SSD IOPS: 32,000 (scaled with storage)
   - Protocol: NFSv4.1 with nconnect (8 connections for max throughput)
   - Deployment type: MULTI_AZ_2 (second-generation Multi-AZ)
@@ -113,7 +113,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
 - **Kafka Tuning**:
   - Increased `num.io.threads`: 16
   - Increased `num.network.threads`: 8
-  - Larger socket buffers: 2MB
+  - Larger socket buffers: 2MiB
   - Increased `socket.send.buffer.bytes`: 2097152
   - Increased `socket.receive.buffer.bytes`: 2097152
 - **Expected**: Lower latency, higher throughput at increased cost
@@ -128,7 +128,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
 - **Cluster**: 4 brokers (m8g.2xlarge equivalent - reduced compute)
 - **FSxN Configuration**:
   - Storage capacity: 2048 GiB SSD (56% of Configuration A)
-  - Throughput capacity: 512 MB/s (25% of Configuration A)
+  - Throughput capacity: 512 MiB/s (25% of Configuration A)
   - SSD IOPS: 8,000 (scaled with storage)
   - Protocol: NFSv4.1 with nconnect (2 connections)
   - Deployment type: SINGLE_AZ_1 (first-generation Single-AZ)
@@ -145,7 +145,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
   - Reduced batch sizes: 524288 (512 KiB) to match reduced throughput
 - **Expected**: 40-50% cost reduction with moderate performance impact
 - **Rationale**:
-  - 512 MB/s throughput sufficient for steady-state workload
+  - 512 MiB/s throughput sufficient for steady-state workload
   - SINGLE_AZ_1 reduces HA costs while maintaining fault domain protection
   - Smaller storage capacity with compression enabled
   - Reduced nconnect connections (2 instead of 4)
@@ -156,15 +156,15 @@ For NetApp FSxN testing, we will explore the following configuration variations 
   - **Effective storage I/O**: (1 GiB/s × 0.4) + (3 GiB/s × 0.4) = 1.6 GiB/s compressed
   - **Caching benefit**: Conservative 20% cache hit ratio for reads: 1.6 GiB/s × 0.8 = 1.28 GiB/s
   - **Steady-state assumption**: Cost-optimized for average rather than peak workload
-  - **Final calculation**: 1.28 GiB/s × 0.4 (cost optimization factor) = ~512 MB/s
+  - **Final calculation**: 1.28 GiB/s × 0.4 (cost optimization factor) = ~512 MiB/s
   - **Validation approach**: Monitor compression ratios and cache performance, adjust if bottlenecks appear
 
 ### Configuration D: High Availability FSxN
 - **Topic Configuration**: 576 partitions, 3x replication
 - **Cluster**: 6 brokers (m8g.4xlarge equivalent)
 - **FSxN Configuration**:
-  - Storage capacity: 1.2 TB SSD
-  - Throughput capacity: 768 MB/s (768 MB/s chosen for balanced HA performance)
+  - Storage capacity: 1.2 TiB SSD
+  - Throughput capacity: 768 MiB/s (768 MiB/s chosen for balanced HA performance)
   - SSD IOPS: 12,000 (scaled with storage)
   - Protocol: NFSv4.1 with nconnect (4 connections)
   - Deployment type: MULTI_AZ_1 (first-generation Multi-AZ for proven stability)
@@ -186,7 +186,7 @@ For NetApp FSxN testing, we will explore the following configuration variations 
   - **HA overhead**: Additional 20-30% capacity for synchronous replication overhead
   - **Conservative caching**: Assume 30% cache hit ratio (lower than Config A for reliability)
   - **Calculation**: (1 GiB/s write + 2.1 GiB/s read) × 1.3 HA overhead = ~4.3 GiB/s theoretical
-  - **Practical provisioning**: 768 MB/s represents a more conservative starting point that:
+  - **Practical provisioning**: 768 MiB/s represents a more conservative starting point that:
     - Prioritizes stability over maximum throughput
     - Accounts for additional HA-related network traffic
     - Provides headroom for failover operations
@@ -204,8 +204,8 @@ In addition to standard metrics, we will track FSxN-specific performance indicat
 - **Cache Hit Ratio**: % of requests served from cache
 
 ### Cost Metrics:
-- **Storage Cost**: $/GB/month for provisioned capacity
-- **Throughput Cost**: $/MB/s for provisioned throughput
+- **Storage Cost**: $/GiB/month for provisioned capacity
+- **Throughput Cost**: $/MiB/s for provisioned throughput
 - **Operational Cost**: Management overhead and backup costs
 - **Total Cost of Ownership**: Comprehensive cost comparison vs AWS baseline
 
@@ -236,14 +236,14 @@ In addition to standard metrics, we will track FSxN-specific performance indicat
 ## Metrics Collection
 
 ### Performance Metrics
-- **Throughput**: Messages per second (MB/s)
+- **Throughput**: Messages per second (MiB/s)
 - **Latency**: End-to-end latency (ms)
 - **CPU Utilization**: Percentage usage across brokers
 - **Memory Usage**: Memory consumption per broker
 - **Network I/O**: Network throughput and latency
 
 ### Cost Analysis
-- **Cost Estimation**: Storage and operational costs per GB/month
+- **Cost Estimation**: Storage and operational costs per GiB/month
 
 ### Tools
 - **Kafka Tools**: Kafka Producer/Consumer Performance tools
