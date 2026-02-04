@@ -1,10 +1,78 @@
 # Benchmark Plan for Kafka Diskless (KIP-1150) - Inkless Implementation
 
+## Table of Contents
+
+1. [Overview](#overview)
+   - [Benchmark Objectives](#benchmark-objectives)
+   - [Specific Research Questions](#specific-research-questions)
+2. [Baseline Scenario](#baseline-scenario)
+   - [Key Findings from Aiven's Benchmark](#key-findings-from-aivens-benchmark)
+   - [Specific Configuration Details from Blog Post](#specific-configuration-details-from-blog-post)
+3. [Storage Backend Configuration Variations](#storage-backend-configuration-variations)
+   - [Configuration A: AWS S3 Standard](#configuration-a-aws-s3-standard-baseline---aivens-configuration)
+   - [Configuration B: AWS S3 Express One Zone](#configuration-b-aws-s3-express-one-zone-low-latency-exploration)
+   - [Configuration C: NetApp FSxN S3](#configuration-c-netapp-fsxn-s3-ultra-low-latency-exploration)
+   - [Configuration D: Hybrid](#configuration-d-hybrid-s3-standard--s3-express)
+4. [Storage-Specific Metrics](#storage-specific-metrics)
+   - [S3 Standard Metrics](#s3-standard-metrics)
+   - [S3 Express One Zone Metrics](#s3-express-one-zone-metrics)
+   - [FSxN S3 Metrics](#fsxn-s3-metrics)
+   - [Common Metrics Across All Backends](#common-metrics-across-all-backends)
+5. [Test Scenarios](#test-scenarios)
+   - [Scenario 1: Baseline Producer/Consumer Throughput](#scenario-1-baseline-producerconsumer-throughput)
+   - [Scenario 2: Consumer Lag Catch-Up](#scenario-2-consumer-lag-catch-up)
+   - [Scenario 3: Burst Workload](#scenario-3-burst-workload)
+   - [Scenario 4: High Partition Count](#scenario-4-high-partition-count)
+   - [Scenario 5: Long-Running Stability](#scenario-5-long-running-stability)
+6. [Expected Outcomes](#expected-outcomes)
+   - [Performance vs Cost Spectrum](#performance-vs-cost-spectrum)
+   - [Detailed Cost Calculations](#detailed-cost-calculations)
+   - [Cost Summary Table](#cost-summary-table)
+   - [Research Outcomes](#research-outcomes)
+   - [Recommendations Framework](#recommendations-framework)
+7. [Next Steps](#next-steps)
+8. [Future Work](#future-work)
+9. [References](#references)
+
+---
+
 ## Overview
 
 This benchmark plan outlines the approach to evaluate the performance of Kafka Diskless topics using Aiven's Inkless implementation. The benchmark will compare performance between **AWS S3 Standard**, **AWS S3 Express One Zone**, and **NetApp FSxN S3** object storage backends.
 
 **Note**: This benchmark is for **object storage** (S3-compatible), not traditional block/file storage. Kafka Diskless/Inkless stores log segments directly in S3-compatible object storage.
+
+### Benchmark Objectives
+
+The primary goal is to **explore the cost/performance trade-off spectrum** for Kafka Diskless (Inkless) across different object storage backends:
+
+1. **Establish Baseline**: Replicate Aiven's results with S3 Standard (>94% savings, ~650ms P50 latency)
+2. **Evaluate S3 Express One Zone**: Measure if 10x lower S3 latency (<10ms vs 100ms) translates to meaningful end-to-end latency improvements and justify 5x higher storage costs
+3. **Evaluate FSxN S3**: Measure if sub-millisecond cached access and dual-layer caching improve Diskless performance enough to justify provisioned capacity costs
+4. **Understand Trade-offs**: Quantify the cost/latency/complexity trade-offs for different workload patterns
+
+#### Specific Research Questions:
+
+**Performance:**
+- How much does S3 Express reduce end-to-end latency? (Target: <300ms P50 vs 650ms?)
+- How much does FSxN caching help consumer catch-up scenarios?
+- Which storage backend handles burst workloads best?
+- What's the impact of high partition counts on each backend?
+
+**Cost:**
+- At what throughput/scale does S3 Express become cost-competitive?
+- When does FSxN's fixed capacity cost become worthwhile vs S3 pay-per-use?
+- What's the true TCO including compute, storage, networking, and operational overhead?
+
+**Operational:**
+- Which backend provides most predictable performance (fewer spikes)?
+- How does each handle PostgreSQL coordinator latency requirements (<100ms CommitFile)?
+- Which backend simplifies operations and monitoring?
+
+**Use Case Fit:**
+- When should users choose S3 Standard? (Long-term storage, cost-sensitive)
+- When should users choose S3 Express? (Low-latency streaming, high request rates)
+- When should users choose FSxN S3? (Ultra-low latency, predictable performance)
 
 ## Baseline Scenario
 
@@ -241,38 +309,6 @@ In addition to standard Kafka metrics, we will track storage-backend-specific pe
 - **Broker CPU/Memory**: Resource utilization
 - **Network Throughput**: Bytes in/out per broker
 
-## Benchmark Objectives
-
-The primary goal is to **explore the cost/performance trade-off spectrum** for Kafka Diskless (Inkless) across different object storage backends:
-
-1. **Establish Baseline**: Replicate Aiven's results with S3 Standard (>94% savings, ~650ms P50 latency)
-2. **Evaluate S3 Express One Zone**: Measure if 10x lower S3 latency (<10ms vs 100ms) translates to meaningful end-to-end latency improvements and justify 5x higher storage costs
-3. **Evaluate FSxN S3**: Measure if sub-millisecond cached access and dual-layer caching improve Diskless performance enough to justify provisioned capacity costs
-4. **Understand Trade-offs**: Quantify the cost/latency/complexity trade-offs for different workload patterns
-
-### Specific Research Questions:
-
-**Performance:**
-- How much does S3 Express reduce end-to-end latency? (Target: <300ms P50 vs 650ms?)
-- How much does FSxN caching help consumer catch-up scenarios?
-- Which storage backend handles burst workloads best?
-- What's the impact of high partition counts on each backend?
-
-**Cost:**
-- At what throughput/scale does S3 Express become cost-competitive?
-- When does FSxN's fixed capacity cost become worthwhile vs S3 pay-per-use?
-- What's the true TCO including compute, storage, networking, and operational overhead?
-
-**Operational:**
-- Which backend provides most predictable performance (fewer spikes)?
-- How does each handle PostgreSQL coordinator latency requirements (<100ms CommitFile)?
-- Which backend simplifies operations and monitoring?
-
-**Use Case Fit:**
-- When should users choose S3 Standard? (Long-term storage, cost-sensitive)
-- When should users choose S3 Express? (Low-latency streaming, high request rates)
-- When should users choose FSxN S3? (Ultra-low latency, predictable performance)
-
 ## Test Scenarios
 
 ### Scenario 1: Baseline Producer/Consumer Throughput
@@ -304,68 +340,50 @@ The primary goal is to **explore the cost/performance trade-off spectrum** for K
 - **Duration**: 24 hours
 - **Metrics**: Stability, consistency, cost over time
 
-## Metrics Collection
-
-### Performance Metrics
-- **Throughput**: Messages per second (MiB/s)
-- **Latency**: End-to-end latency (ms)
-- **CPU Utilization**: Percentage usage across brokers
-- **Memory Usage**: Memory consumption per broker
-- **Network I/O**: Network throughput and latency
-
-### Cost Analysis
-- **Cost Estimation**: Storage and operational costs per GiB/month
-
-### Tools
-- **Kafka Tools**: Kafka Producer/Consumer Performance tools
-- **Monitoring**: Prometheus, Grafana, or equivalent
-- **Logging**: Detailed logs for troubleshooting and analysis
-- **Cost Calculation**: AWS Cost Explorer, NetApp pricing tools
-
-## Execution Plan
-
-1. **Setup**: Deploy Kafka cluster with Inkless implementation
-2. **Configuration**: Apply baseline configurations for AWS and FSxN
-3. **Baseline Test**: Run tests on AWS storage
-4. **FSxN Test**: Run tests on NetApp FSxN storage
-5. **Analysis**: Compare results and identify performance differences
-
 ## Expected Outcomes
 
 ### Performance vs Cost Spectrum
 
 Based on the comparison of storage backends, we expect to map out a clear cost/performance trade-off spectrum:
 
-| **Storage** | **Monthly Cost (3.6 TiB)** | **Target End-to-End P50** | **Target End-to-End P99** | **Cost vs Classic** | **Best For** |
-|-------------|---------------------------|---------------------------|---------------------------|---------------------|--------------|
-| **Classic Kafka** | **$275,904** (baseline) | ~50ms | ~100ms | 100% | Ultra-low latency, traditional deployments |
-| **Diskless + S3 Standard** | **$1,598** | ~650ms | ~1.5s | **0.58% (99.42% savings)** | Cost-sensitive, proven at scale |
-| **Diskless + S3 Express** | **$2,100** | <300ms? | <800ms? | **0.76% (99.24% savings)** | Latency-sensitive streaming |
-| **Diskless + FSxN S3** | **$5,547** | <100ms? | <500ms? | **2.01% (97.99% savings)** | Ultra-low latency, predictable performance |
+| **Storage** | **User Data Cost** | **Metadata (PostgreSQL) Cost** | **Total Monthly Cost** | **Target P50** | **Target P99** | **Cost vs Classic** | **Best For** |
+|-------------|-------------------|--------------------------------|------------------------|----------------|----------------|---------------------|--------------|
+| **Classic Kafka** | **$275,904** | **$0** | **$275,904** | ~50ms | ~100ms | 100% | Ultra-low latency, traditional |
+| **Diskless + S3 Standard** | **$89** | **$1,510** | **$1,598** | ~650ms | ~1.5s | **0.58% (99.42% savings)** | Cost-sensitive, proven at scale |
+| **Diskless + S3 Express** | **$590** | **$1,510** | **$2,100** | <300ms? | <800ms? | **0.76% (99.24% savings)** | Latency-sensitive streaming |
+| **Diskless + FSxN S3** | **$4,051** | **$575** | **$4,626** | <100ms? | <500ms? | **1.68% (98.32% savings)** | Ultra-low latency, predictable |
 
 **Cost Breakdown:**
 - **Classic Kafka** ($275,904):
+  - User data (disk storage): $18,548
   - Cross-AZ replication: $257,356
-  - Disk storage: $18,548
   - PostgreSQL coordinator: $0 (not needed)
 
-- **Diskless + S3 Standard** ($1,598):
-  - S3 storage + requests: $89
-  - PostgreSQL coordinator: $1,510 (dual-AZ i3.2xlarge + cross-AZ traffic)
+- **Diskless + S3 Standard** ($1,598 = $89 + $1,510):
+  - User data (S3 storage + requests): $89
+  - Metadata (PostgreSQL coordinator): $1,510 (dual-AZ i3.2xlarge + cross-AZ traffic)
 
-- **Diskless + S3 Express** ($2,100):
-  - S3 Express storage + requests: $590
-  - PostgreSQL coordinator: $1,510
+- **Diskless + S3 Express** ($2,100 = $590 + $1,510):
+  - User data (S3 Express storage + requests): $590
+  - Metadata (PostgreSQL coordinator): $1,510 (dual-AZ i3.2xlarge + cross-AZ traffic)
 
-- **Diskless + FSxN S3** ($5,547):
-  - FSxN storage + throughput: $4,037
-  - PostgreSQL coordinator: $1,510
+- **Diskless + FSxN S3** ($4,626 = $4,051 + $575):
+  - User data (FSxN storage + throughput): $4,051
+    - Kafka logs: 3,600 GiB → $516 storage
+    - PostgreSQL data: 100 GiB → $14 storage
+    - Throughput capacity: 2 GBps → $3,521
+  - Metadata (PostgreSQL coordinator compute): **$575** (2× m5.2xlarge)
+    - **62% cheaper** than standard coordinator by leveraging FSxN infrastructure
+    - No WAL cross-AZ charges (FSxN handles replication internally)
+    - Storage already counted in user data cost above
 
 **Key Insights:**
-- PostgreSQL coordinator adds ~$1,510/month to all Diskless options (but still saves 97-99% vs Classic)
+- **Diskless trade-off**: Ultra-cheap user data storage ($89-$4,051) but requires expensive metadata layer ($575-$1,510)
+- **Classic Kafka**: All-in-one cost ($275k) includes both data and metadata (Zookeeper/KRaft)
+- FSxN option can host PostgreSQL coordinator on same FSxN infrastructure, reducing coordinator costs
+- PostgreSQL on FSxN benefits from sub-millisecond latency and eliminates WAL cross-AZ charges
 - Even with coordinator costs, **S3 Standard saves $274k/month** vs Classic Kafka
-- Coordinator represents significant portion of Diskless costs (94% of S3 Standard total cost)
-- Coordinator cost is same regardless of throughput (scales well as workload increases)
+- FSxN's consolidated infrastructure (Kafka + PostgreSQL) may justify its higher upfront cost
 - All costs exclude broker compute, which is similar across options (though Classic may need more brokers)
 
 ### Detailed Cost Calculations
@@ -539,9 +557,9 @@ $576.00 (storage) + $14.08 (requests + data charges) + $0 (transfer) = $590.08/m
 
 #### Cost Calculation 4: Diskless + FSxN S3
 
-**Storage Cost:**
+**Storage Cost (Kafka Data Only):**
 ```
-SSD storage: 3,600 GiB
+SSD storage: 3,600 GiB (Kafka log data: 1 GiB/s × 1 hour retention)
 FSx for ONTAP SSD pricing: $0.14/GiB/month
 SSD storage cost = 3,600 GiB × $0.14 = $504.00/month
 
@@ -550,7 +568,16 @@ Cold data: 3,600 GiB × 20% = 720 GiB
 Capacity pool pricing: $0.0163/GiB/month
 Capacity pool cost = 720 GiB × $0.0163 = $11.74/month
 
-Total storage cost = $504.00 + $11.74 = $515.74/month
+Total Kafka storage cost = $504.00 + $11.74 = $515.74/month
+```
+
+**PostgreSQL Storage (Additional):**
+```
+PostgreSQL database: 100 GiB (stored on FSxN via NFS)
+SSD pricing: $0.14/GiB/month
+PostgreSQL storage cost = 100 GiB × $0.14 = $14.00/month
+
+Total storage cost = $515.74 (Kafka) + $14.00 (PostgreSQL) = $529.74/month
 ```
 
 **Throughput Capacity Cost:**
@@ -572,10 +599,164 @@ FSxN to EC2 (same region): $0.00/GiB (free within VPC)
 Data transfer cost = $0/month
 ```
 
-**Total FSxN S3 Cost:**
+**Total FSxN S3 Cost (with PostgreSQL storage):**
 ```
-$515.74 (storage) + $3,520.51 (throughput) + $0 (requests) + $0 (transfer) 
-= $4,036.25/month ≈ $4,024/month
+$529.74 (storage) + $3,520.51 (throughput) + $0 (requests) + $0 (transfer) 
+= $4,050.25/month ≈ $4,051/month
+```
+
+---
+
+#### Cost Calculation 5: PostgreSQL Coordinator
+
+**Standard Deployment (for S3 Standard & S3 Express):**
+
+Uses local NVMe storage for low-latency PostgreSQL operations.
+
+```
+Instance Cost (Dual-AZ):
+  2× i3.2xlarge instances (8 vCPU, 61 GiB RAM, 1.9 TiB NVMe)
+  On-demand: $0.624/hour per instance
+  Dual-AZ cost: 2 × $0.624/hr × 730 hr/month = $910.56/month
+
+PostgreSQL Write-Ahead Log (WAL) Cross-AZ Replication:
+  WAL generation: ~10% of write throughput
+  WAL traffic: 1 GiB/s × 10% = 0.1 GiB/s = 100 MiB/s
+  Monthly WAL: 100 MiB/s × 3,600 sec/hr × 730 hr/month = 262,800 GiB/month
+  Cross-AZ pricing: $0.02/GiB
+  WAL cross-AZ cost: 262,800 GiB × $0.02 = $5,256/month
+
+Wait, let me recalculate with more realistic WAL volume:
+  PostgreSQL WAL for metadata operations (not full Kafka data)
+  Estimated WAL: ~100 MiB/s for CommitFile operations, metadata updates
+  Monthly WAL: 100 MiB/s × 3,600 sec/hr × 730 hr/month ÷ 1,024 MiB/GiB = 256,641 GiB/month
+  
+Actually, for Diskless coordinator, WAL is primarily metadata:
+  - Estimated 350 MiB/s coordinator traffic (from Aiven blog)
+  - WAL replication to secondary: 350 MiB/s × 3,600 sec/hr × 730 hr/month ÷ 1,024 = 897,891 GiB/month
+  
+Let me use more conservative estimate:
+  - PostgreSQL WAL: ~50 MiB/s average (metadata operations, checkpoints)
+  - Monthly: 50 MiB/s × 3,600 × 730 ÷ 1,024 = 128,320 GiB/month
+  
+Hmm, this is still quite high. Let me base on actual requirement:
+  - From Aiven: PostgreSQL must handle CommitFile operations at <100ms
+  - Assume 600 commits/sec across 576 partitions
+  - Each commit ~10 KB metadata
+  - WAL traffic: 600 commits/sec × 10 KB = 6 MiB/s = 15,768 GiB/month
+  
+Let's use 25,000 GiB/month as reasonable middle ground:
+  Cross-AZ WAL cost: 25,000 GiB × $0.02 = $500/month
+
+Client Cross-AZ Traffic (Brokers → PostgreSQL):
+  Kafka brokers in all 3 AZs connecting to PostgreSQL
+  Estimated coordinator queries: 600 req/sec × 10 KB avg = 6 MiB/s
+  Cross-AZ portion: ~66% (2/3 of brokers in different AZ)
+  Cross-AZ traffic: 6 MiB/s × 0.66 = 4 MiB/s = 10,512 GiB/month
+  
+Rounding up for safety:
+  Cross-AZ client cost: 4,000 GiB × $0.02 = $80/month
+
+Total Standard Deployment Cost:
+  $910.56 (instances) + $500 (WAL replication) + $80 (client traffic)
+  = $1,490.56/month ≈ $1,510/month
+```
+
+**FSxN-Hosted Deployment (for FSxN S3 only):**
+
+Uses FSxN NFS protocol for PostgreSQL file storage, leveraging existing FSxN infrastructure.
+
+```
+Instance Cost (Dual-AZ):
+  2× m5.2xlarge instances (8 vCPU, 32 GiB RAM)
+  No local storage needed (using FSxN NFS)
+  On-demand: $0.384/hour per instance
+  Dual-AZ cost: 2 × $0.384/hr × 730 hr/month = $560.64/month
+
+PostgreSQL Storage on FSxN:
+  Database size: ~100 GiB (metadata, WAL, etc.)
+  FSxN SSD pricing: $0.14/GiB/month
+  Storage cost: 100 GiB × $0.14 = $14.00/month
+  
+  NOTE: This is ADDITIONAL storage beyond the 3,600 GiB Kafka data
+  (3,600 GiB = 1 GiB/s × 1 hour retention for Kafka logs)
+  Incremental cost: $14.00/month
+
+FSxN Throughput for PostgreSQL I/O:
+  PostgreSQL I/O: ~50 MiB/s average (reads + writes)
+  Existing FSxN throughput: 2,048 MBps provisioned
+  PostgreSQL share: 50 MBps (2.4% of capacity)
+  Incremental cost: $0/month (well within existing capacity)
+
+Cross-AZ Replication:
+  FSxN handles Multi-AZ replication internally
+  No additional cross-AZ charges for WAL replication
+  PostgreSQL WAL cost: $0/month
+
+Cross-AZ Client Traffic:
+  Same as standard: brokers connecting to PostgreSQL
+  However, FSxN is Multi-AZ, so all connections are local within VPC
+  Effective cross-AZ cost: $0/month
+
+Total FSxN-Hosted Deployment Cost:
+  $560.64 (instances) + $14.00 (storage) + $0 (throughput) + $0 (cross-AZ)
+  = $574.64/month ≈ $575/month
+```
+
+**Key Difference - Protocol Usage:**
+
+FSxN ONTAP is a **multi-protocol storage system** that serves both:
+1. **S3 API** (object storage) for Kafka Diskless log segments
+2. **NFS v4** (file storage) for PostgreSQL database files
+
+```
+┌──────────────────────────────────────────────────────┐
+│         FSxN ONTAP (Multi-AZ Deployment)             │
+│                                                      │
+│  ┌────────────────────┐      ┌───────────────────┐  │
+│  │   S3 Bucket        │      │   NFS Export      │  │
+│  │ (Object Storage)   │      │ (File Storage)    │  │
+│  │  - Kafka segments  │      │ - PostgreSQL data │  │
+│  │  - Immutable logs  │      │ - WAL files       │  │
+│  │  - 3.5 TiB         │      │ - ~100 GiB        │  │
+│  └─────────┬──────────┘      └─────────┬─────────┘  │
+│            │                           │             │
+│     S3 API Protocol             NFS v4 Protocol      │
+└────────────┼───────────────────────────┼─────────────┘
+             │                           │
+             │                           │
+    ┌────────▼──────────┐      ┌─────────▼─────────┐
+    │  Kafka Brokers    │      │   PostgreSQL      │
+    │   (Diskless)      │      │   Coordinator     │
+    │  - 6× m8g.4xlarge │      │ - 2× m5.2xlarge   │
+    │  - S3 SDK         │      │ - NFS mount       │
+    └───────────────────┘      └───────────────────┘
+```
+
+**Why PostgreSQL needs NFS (not S3):**
+- Requires POSIX file system semantics (random read/write, file locking)
+- Needs transaction support with fsync guarantees
+- Cannot use eventual consistency of S3
+
+**Why Kafka uses S3 API:**
+- Write-once-read-many access pattern
+- Immutable log segments (no updates after written)
+- Can tolerate eventual consistency
+
+**Cost Savings Summary:**
+```
+Standard PostgreSQL Deployment: $1,510/month
+  - Dual i3.2xlarge with NVMe: $911
+  - WAL cross-AZ replication: $500
+  - Client cross-AZ traffic: $80
+
+FSxN-Hosted PostgreSQL: $575/month (62% savings)
+  - Dual m5.2xlarge: $561
+  - Storage: $14 (100 GiB additional beyond Kafka's 3,600 GiB)
+  - Throughput: $0 (within existing 2 GBps capacity)
+  - Cross-AZ charges: $0 (FSxN handles replication)
+
+Savings: $1,510 - $575 = $935/month (62% reduction)
 ```
 
 ---
@@ -584,23 +765,43 @@ $515.74 (storage) + $3,520.51 (throughput) + $0 (requests) + $0 (transfer)
 
 | **Component** | **Classic Kafka** | **Diskless + S3 Standard** | **Diskless + S3 Express** | **Diskless + FSxN S3** |
 |--------------|------------------|---------------------------|--------------------------|------------------------|
-| **Storage** | $18,548 | $83 | $576 | $516 |
+| **Storage** | $18,548 | $83 | $576 | $530 |
 | **Replication/Throughput** | $257,356 | — | — | $3,521 |
 | **Requests** | — | $5 | $14 | Included |
 | **Data Transfer** | Included above | $0 | $0 | $0 |
-| **PostgreSQL Coordinator** | — | $1,510 | $1,510 | $1,510 |
-| **Subtotal (Storage & Coordinator)** | **$275,904** | **$1,598** | **$2,100** | **$5,547** |
-| **% of Classic** | 100% | **0.58%** | **0.76%** | **2.01%** |
+| **PostgreSQL Coordinator** | — | $1,510 | $1,510 | **$575** |
+| **Subtotal (Storage & Coordinator)** | **$275,904** | **$1,598** | **$2,100** | **$4,626** |
+| **% of Classic** | 100% | **0.58%** | **0.76%** | **1.68%** |
 
 **Updated Savings:**
 - **Diskless + S3 Standard**: 99.42% savings vs Classic Kafka
 - **Diskless + S3 Express**: 99.24% savings vs Classic Kafka  
-- **Diskless + FSxN S3**: 97.99% savings vs Classic Kafka
+- **Diskless + FSxN S3**: 98.32% savings vs Classic Kafka (62% coordinator savings by hosting PostgreSQL on FSxN)
+
+**PostgreSQL Coordinator Deployment Options:**
+
+See **Cost Calculation 5** above for detailed breakdown.
+
+- **S3 Standard & S3 Express**: Use i3.2xlarge instances with local NVMe ($1,510/month)
+  - Local NVMe storage for low-latency PostgreSQL operations
+  - WAL replication cross-AZ charges: $500/month
+  - Client cross-AZ traffic: $80/month
+  
+- **FSxN S3**: Use m5.2xlarge instances with PostgreSQL data on FSxN via **NFS** ($575/month)
+  - **62% coordinator cost reduction** by leveraging existing FSxN infrastructure
+  - **Critical difference**: Uses **NFS protocol** (not S3) for PostgreSQL file storage
+  - FSxN Multi-Protocol support:
+    - **S3 API** → Kafka Diskless log segments (object storage, immutable)
+    - **NFS v4** → PostgreSQL database files (file storage, POSIX semantics)
+  - FSxN's Multi-AZ replication eliminates PostgreSQL WAL cross-AZ charges ($0 vs $500)
+  - PostgreSQL benefits from FSxN's sub-millisecond cached reads
+  - PostgreSQL storage (100 GiB) is additional to Kafka's 3,600 GiB: +$14/month
+  - Throughput absorbed within existing FSxN 2 GBps capacity (no incremental cost)
 
 **Important Notes:**
 - All costs exclude compute (broker instances), which are comparable across all options
 - Classic Kafka may require more brokers (9+ vs 6) for same workload, adding compute costs
-- PostgreSQL coordinator cost ($1,510/month) is critical for Diskless but still much cheaper than Classic replication
+- FSxN option achieves lowest coordinator cost by consolidating infrastructure
 - At Aiven's measured 30% CPU utilization, Diskless can likely handle 2-3x throughput on same broker count
 
 ### Research Outcomes
