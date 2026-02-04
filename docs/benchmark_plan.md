@@ -12,7 +12,8 @@
    - [Configuration A: AWS S3 Standard](#configuration-a-aws-s3-standard-baseline---aivens-configuration)
    - [Configuration B: AWS S3 Express One Zone](#configuration-b-aws-s3-express-one-zone-low-latency-exploration)
    - [Configuration C: NetApp FSxN S3](#configuration-c-netapp-fsxn-s3-ultra-low-latency-exploration)
-   - [Configuration D: Hybrid](#configuration-d-hybrid-s3-standard--s3-express)
+     - [Configuration C1: FSxN - SSD Only](#configuration-c1-fsxn---ssd-only-no-tiering)
+     - [Configuration C2: FSxN - Auto Tiering](#configuration-c2-fsxn---auto-tiering-cost-optimized)
 4. [Storage-Specific Metrics](#storage-specific-metrics)
    - [S3 Standard Metrics](#s3-standard-metrics)
    - [S3 Express One Zone Metrics](#s3-express-one-zone-metrics)
@@ -217,64 +218,133 @@ For comparing different object storage backends, we will test the following conf
   - May justify cost if end-to-end latency drops to <300ms P50
 
 ### Configuration C: NetApp FSxN S3 (Ultra-Low Latency Exploration)
+
+FSxN ONTAP provides automatic tiering between SSD and capacity pool tiers, allowing for different cost/performance trade-offs. We will test three FSxN configurations:
+
+---
+
+#### Configuration C1: FSxN - SSD Only (No Tiering)
+
+**Purpose:** Baseline FSxN performance with all data on high-performance SSD.
+
 - **Storage Backend**: NetApp FSx for ONTAP S3 API
 - **Topic Configuration**: 576 partitions, 3x replication
 - **Cluster**: 6 brokers (m8g.4xlarge instances)
 - **FSxN Configuration**:
-  - Storage capacity: 3,600 GiB SSD
+  - Storage capacity: 3,700 GiB SSD (3,600 GiB Kafka + 100 GiB PostgreSQL)
   - Throughput capacity: 2,048 MBps (2 GBps)
   - SSD IOPS: 11,059 IOPS (3,072 IOPS/TiB × 3.6 TiB)
   - Disk throughput: 2,765 MBps baseline (768 MBps/TiB × 3.6 TiB)
   - Protocol: **S3 API** (not NFS - using ONTAP's S3 interface)
   - Deployment type: Multi-AZ (for high availability)
-  - Target latency: <1ms (cached), 1-5ms (uncached SSD), 10-20ms (capacity pool)
+  - **Tiering policy**: None (all data on SSD)
+  - **Storage efficiency**: Disabled (baseline measurement)
+  - Target latency: <1ms (cached), 1-5ms (uncached SSD)
   - Cache: Dual-layer (NVMe + in-memory)
-  - Storage cost: $140/TiB/month (SSD) + $13/TiB (capacity pool)
-  - Throughput cost: $3,520/month (for 2 GBps capacity)
+- **Costs**:
+  - SSD storage: $530/month (3,700 GiB × $0.14/GiB)
+  - Throughput capacity: $3,521/month (2,048 MBps × $1.719/MBps)
+  - PostgreSQL coordinator: $575/month (m5.2xlarge on FSxN NFS)
+  - **Total: $4,626/month**
 - **Research Questions**:
   - Does FSxN's dual-layer cache significantly improve hot segment access?
   - Can <1ms cached reads reduce end-to-end latency below S3 Express?
-  - How much does automatic tiering reduce costs for cold data?
-  - Does compression/deduplication provide additional savings?
   - Is provisioned capacity cost justified by performance predictability?
-- **Expected Cost Trade-off**:
-  - Storage: 6x more expensive than S3 Standard ($140 vs $23/TiB)
-  - Throughput: Fixed $3,520/month regardless of usage
-  - Requests: Included in throughput capacity (vs pay-per-request)
-  - For 3,600 GiB:
-    - S3 Standard: ~$89/month (storage + requests)
-    - S3 Express: ~$397/month
-    - FSxN: ~$504/month storage + $3,520 capacity = **$4,024/month**
-  - **~45x more expensive than S3 Standard**, **~10x more expensive than S3 Express**
-  - Break-even requires high request rates (>10M req/sec) or need for <5ms latency
-- **Kafka Configuration**:
-  - Same as baseline
-  - S3 endpoint: FSxN S3 endpoint URL
-  - S3 credentials: FSxN S3 user credentials
 - **Expected Outcome**: 
-  - Best latency for cached data, but highest cost
-  - Predictable performance with provisioned capacity
-  - Best for ultra-low latency requirements or very high throughput (>5 GiB/s)
-  - May not justify cost for typical Kafka Diskless workloads
+  - Best latency: <100ms P50 end-to-end (target)
+  - Highest cost: $4,626/month
+  - Predictable performance with no tiering delays
 
-### Configuration D: Hybrid (S3 Standard + S3 Express)
-- **Storage Backend**: Hybrid - S3 Express for hot data, S3 Standard for cold data
+---
+
+#### Configuration C2: FSxN - Auto Tiering (Cost Optimized)
+
+**Purpose:** Reduce FSxN costs by automatically tiering cold data to capacity pool.
+
+- **Storage Backend**: NetApp FSx for ONTAP S3 API
 - **Topic Configuration**: 576 partitions, 3x replication
 - **Cluster**: 6 brokers (m8g.4xlarge instances)
-- **S3 Configuration**:
-  - Hot segments (last 1 hour): S3 Express One Zone
-  - Cold segments (>1 hour old): S3 Standard (with lifecycle policy)
-  - Automatic tiering: Lifecycle policy moves objects after 1 hour
-  - Expected latency: <10ms (hot), 100-200ms (cold)
+- **FSxN Configuration**:
+  - **Tiering policy**: Auto (aggressive)
+  - **Cooling period**: 2 days (minimum, for faster tiering)
+  - **Storage efficiency**: Disabled (measure tiering impact separately)
+  - Expected data distribution:
+    - Hot data (20%): 740 GiB on SSD
+    - Cold data (80%): 2,960 GiB on capacity pool
+  - Throughput capacity: 2,048 MBps (2 GBps)
+  - Protocol: S3 API
+  - Deployment type: Multi-AZ
+  - Target latency: <1ms (hot/cached), 10-20ms (cold/capacity pool)
+- **Costs**:
+  - SSD storage (20%): $104/month (740 GiB × $0.14/GiB)
+  - Capacity pool (80%): $48/month (2,960 GiB × $0.0163/GiB)
+  - Throughput capacity: $3,521/month
+  - PostgreSQL coordinator: $575/month
+  - **Total: $4,248/month** (8% savings vs C1)
+- **Research Questions**:
+  - How much does automatic tiering reduce costs for cold data?
+  - Does 10-20ms capacity pool latency impact lagging consumer performance?
+  - What percentage of data actually tiers in real Kafka workloads?
+  - Does caching compensate for capacity pool latency?
+- **Expected Outcome**:
+  - Hybrid latency: <100ms P50 for hot consumers, <300ms P50 for lagging consumers
+  - 8% cost reduction vs SSD-only
+  - Transparent to Inkless (no configuration changes)
+
+---
+
+---
+
+### FSxN Configuration Comparison
+
+| **Configuration** | **Tiering** | **Storage Cost** | **Total Cost** | **Savings vs C1** | **Target P50** |
+|-------------------|-------------|------------------|----------------|-------------------|----------------|
+| **C1: SSD Only** | None | $530 | $4,626 | 0% (baseline) | <100ms |
+| **C2: Auto Tiering** | Auto (2d) | $152 | $4,248 | 8% | <100ms (hot), <300ms (cold) |
+
+**Key Insights:**
+- FSxN tiering is **transparent to Inkless** (no code changes, same S3 API)
+- Auto tiering can reduce storage costs by 71% ($530 → $152)
+- Throughput cost ($3,521) remains fixed regardless of tiering
+- PostgreSQL coordinator benefits from FSxN infrastructure ($575 vs $1,510)
+- Following Aiven baseline: compression/deduplication excluded from benchmark
+
+### Common FSxN Settings (All Configurations)
+
 - **Kafka Configuration**:
-  - Same as baseline
-  - Tiered storage: Configure Kafka to tier old segments
-- **Expected**: Best cost/performance balance - fast for recent data, economical for old data
-- **Rationale**:
-  - Active consumption benefits from S3 Express low latency
-  - Historical data stored cheaply in S3 Standard
-  - Most consumers read recent messages (hot segments)
-  - **Trade-off**: Complex setup, requires lifecycle management
+  - Same as baseline (Configuration A)
+  - S3 endpoint: FSxN S3 endpoint URL
+  - S3 credentials: FSxN S3 user credentials
+  - **No Inkless changes needed** (tiering transparent at storage layer)
+- **PostgreSQL Coordinator**:
+  - 2× m5.2xlarge instances
+  - PostgreSQL data on FSxN via NFS (not S3)
+  - Benefits from FSxN Multi-AZ replication
+  - No WAL cross-AZ charges ($0 vs $500)
+- **FSxN Volume Settings**:
+  - SSD utilization target: <80% (for optimal tiering)
+  - Capacity pool: Auto-scaling (no provisioning needed)
+  - Caching: Random reads promoted to SSD when SSD <90% utilization
+
+### FSxN vs Other Options
+
+| **Configuration** | **Monthly Cost** | **Target P50** | **Best For** |
+|-------------------|-----------------|----------------|--------------|
+| **A: S3 Standard** | $1,598 | ~650ms | Cost-sensitive, proven at scale |
+| **B: S3 Express** | $2,100 | <300ms | Latency-sensitive streaming |
+| **C1: FSxN SSD** | $4,626 | <100ms | Ultra-low latency baseline |
+| **C2: FSxN Tiering** | $4,248 | <100ms / <300ms | Cost-optimized FSxN |
+
+**FSxN Trade-offs:**
+- ✅ Best latency for hot data (<1ms cached)
+- ✅ Transparent automatic tiering
+- ✅ No Inkless code changes required
+- ✅ Multi-AZ with high availability
+- ⚠️ Still 2-3x more expensive than S3 options
+- ⚠️ Fixed throughput cost ($3,521/month)
+- ⚠️ Requires capacity planning (SSD sizing)
+
+**Note:** Following Aiven's baseline approach, compression/deduplication features are excluded from this benchmark to isolate storage backend performance characteristics.
 
 ## Storage-Specific Metrics
 
@@ -312,7 +382,7 @@ In addition to standard Kafka metrics, we will track storage-backend-specific pe
 ## Test Scenarios
 
 ### Scenario 1: Baseline Producer/Consumer Throughput
-- **Storage**: Test each configuration (A, B, C, D)
+- **Storage**: Test each configuration (A, B, C1, C2)
 - **Workload**: 1 GiB/s producer, 3 GiB/s consumer (3x fan-out)
 - **Duration**: 1 hour
 - **Metrics**: Throughput, latency (P50/P95/P99), CPU, memory, network
@@ -351,9 +421,11 @@ Based on the comparison of storage backends, we expect to map out a clear cost/p
 | **Classic Kafka** | **$275,904** | **$0** | **$275,904** | ~50ms | ~100ms | 100% | Ultra-low latency, traditional |
 | **Diskless + S3 Standard** | **$89** | **$1,510** | **$1,598** | ~650ms | ~1.5s | **0.58% (99.42% savings)** | Cost-sensitive, proven at scale |
 | **Diskless + S3 Express** | **$590** | **$1,510** | **$2,100** | <300ms? | <800ms? | **0.76% (99.24% savings)** | Latency-sensitive streaming |
-| **Diskless + FSxN S3** | **$4,051** | **$575** | **$4,626** | <100ms? | <500ms? | **1.68% (98.32% savings)** | Ultra-low latency, predictable |
+| **Diskless + FSxN (SSD Only)** | **$4,051** | **$575** | **$4,626** | <100ms? | <500ms? | **1.68% (98.32% savings)** | Ultra-low latency baseline |
+| **Diskless + FSxN (Auto Tier)** | **$3,673** | **$575** | **$4,248** | <100ms (hot)<br><300ms (cold) | <500ms (hot)<br><1s (cold) | **1.54% (98.46% savings)** | Cost-optimized FSxN |
 
 **Cost Breakdown:**
+
 - **Classic Kafka** ($275,904):
   - User data (disk storage): $18,548
   - Cross-AZ replication: $257,356
@@ -367,24 +439,43 @@ Based on the comparison of storage backends, we expect to map out a clear cost/p
   - User data (S3 Express storage + requests): $590
   - Metadata (PostgreSQL coordinator): $1,510 (dual-AZ i3.2xlarge + cross-AZ traffic)
 
-- **Diskless + FSxN S3** ($4,626 = $4,051 + $575):
+- **Diskless + FSxN S3 (SSD Only)** ($4,626 = $4,051 + $575):
   - User data (FSxN storage + throughput): $4,051
-    - Kafka logs: 3,600 GiB → $516 storage
-    - PostgreSQL data: 100 GiB → $14 storage
+    - SSD storage: 3,700 GiB → $530 ($516 Kafka + $14 PostgreSQL)
     - Throughput capacity: 2 GBps → $3,521
   - Metadata (PostgreSQL coordinator compute): **$575** (2× m5.2xlarge)
     - **62% cheaper** than standard coordinator by leveraging FSxN infrastructure
     - No WAL cross-AZ charges (FSxN handles replication internally)
     - Storage already counted in user data cost above
 
+- **Diskless + FSxN S3 (Auto Tiering)** ($4,248 = $3,673 + $575):
+  - User data (FSxN storage + throughput): $3,673
+    - SSD storage (20% hot): 740 GiB → $104
+    - Capacity pool (80% cold): 2,960 GiB → $48
+    - Throughput capacity: 2 GBps → $3,521
+  - Metadata (PostgreSQL coordinator): $575
+  - **8% savings** vs SSD-only FSxN
+
 **Key Insights:**
 - **Diskless trade-off**: Ultra-cheap user data storage ($89-$4,051) but requires expensive metadata layer ($575-$1,510)
 - **Classic Kafka**: All-in-one cost ($275k) includes both data and metadata (Zookeeper/KRaft)
+- **FSxN tiering is transparent**: No Inkless code changes needed, automatic at storage layer
+- **FSxN storage cost reduction**: Up to 71% ($530 → $152) with auto tiering
+- **Throughput cost dominates FSxN**: $3,521/month fixed regardless of optimization
+- **Following Aiven baseline**: Compression/deduplication excluded to isolate storage performance
 - FSxN option can host PostgreSQL coordinator on same FSxN infrastructure, reducing coordinator costs
 - PostgreSQL on FSxN benefits from sub-millisecond latency and eliminates WAL cross-AZ charges
 - Even with coordinator costs, **S3 Standard saves $274k/month** vs Classic Kafka
-- FSxN's consolidated infrastructure (Kafka + PostgreSQL) may justify its higher upfront cost
 - All costs exclude broker compute, which is similar across options (though Classic may need more brokers)
+
+**FSxN Configuration Comparison:**
+
+| **FSxN Variant** | **Tiering** | **Storage Cost** | **Total Cost** | **Savings vs SSD-Only** | **Complexity** |
+|------------------|-------------|------------------|----------------|------------------------|----------------|
+| **SSD Only (C1)** | None | $530 | $4,626 | 0% (baseline) | Low |
+| **Auto Tiering (C2)** | Yes (2d) | $152 | $4,248 | 8% | Medium |
+
+**Note:** Compression/deduplication excluded per Aiven baseline methodology.
 
 ### Detailed Cost Calculations
 
@@ -485,9 +576,19 @@ Cross-AZ from S3: Included in request pricing
 Data transfer cost = $0/month
 ```
 
-**Total S3 Standard Cost:**
+**Total S3 Standard Storage Cost (User Data Only):**
 ```
 $82.80 (storage) + $4.57 (requests) + $0 (transfer) = $87.37/month ≈ $89/month
+```
+
+**PostgreSQL Coordinator Cost:**
+```
+See Cost Calculation 5: $1,510/month (standard deployment)
+```
+
+**Total Configuration A Cost:**
+```
+$89 (S3 storage) + $1,510 (PostgreSQL coordinator) = $1,598/month
 ```
 
 ---
@@ -543,12 +644,22 @@ S3 Express to EC2 (same AZ): $0.00/GiB (free)
 Data transfer cost = $0/month
 ```
 
-**Total S3 Express Cost:**
+**Total S3 Express Storage Cost (User Data Only):**
 ```
-$576.00 (storage) + $14.08 (requests + data charges) + $0 (transfer) = $590.08/month
+$576.00 (storage) + $14.08 (requests + data charges) + $0 (transfer) = $590.08/month ≈ $590/month
 ```
 
-**Note**: Using conservative estimate of **$397/month** in comparison table, which assumes:
+**PostgreSQL Coordinator Cost:**
+```
+See Cost Calculation 5: $1,510/month (standard deployment)
+```
+
+**Total Configuration B Cost:**
+```
+$590 (S3 Express storage) + $1,510 (PostgreSQL coordinator) = $2,100/month
+```
+
+**Note**: Using conservative estimate of **$397/month** for storage in some comparisons, which assumes:
 - Potential compression reducing data volume by ~40%
 - Some cache hits reducing GET operations
 - Optimized batch sizes reducing request count
@@ -557,18 +668,15 @@ $576.00 (storage) + $14.08 (requests + data charges) + $0 (transfer) = $590.08/m
 
 #### Cost Calculation 4: Diskless + FSxN S3
 
-**Storage Cost (Kafka Data Only):**
+This calculation covers both FSxN configurations (C1: SSD Only and C2: Auto Tiering).
+
+##### Configuration C1: FSxN SSD Only (No Tiering)
+
+**Storage Cost (Kafka Data):**
 ```
 SSD storage: 3,600 GiB (Kafka log data: 1 GiB/s × 1 hour retention)
 FSx for ONTAP SSD pricing: $0.14/GiB/month
-SSD storage cost = 3,600 GiB × $0.14 = $504.00/month
-
-Capacity pool storage (tiered): Assuming 20% tiers to capacity pool
-Cold data: 3,600 GiB × 20% = 720 GiB
-Capacity pool pricing: $0.0163/GiB/month
-Capacity pool cost = 720 GiB × $0.0163 = $11.74/month
-
-Total Kafka storage cost = $504.00 + $11.74 = $515.74/month
+Kafka storage cost = 3,600 GiB × $0.14 = $504.00/month
 ```
 
 **PostgreSQL Storage (Additional):**
@@ -577,7 +685,7 @@ PostgreSQL database: 100 GiB (stored on FSxN via NFS)
 SSD pricing: $0.14/GiB/month
 PostgreSQL storage cost = 100 GiB × $0.14 = $14.00/month
 
-Total storage cost = $515.74 (Kafka) + $14.00 (PostgreSQL) = $529.74/month
+Total storage cost = $504.00 (Kafka) + $14.00 (PostgreSQL) = $518.00/month
 ```
 
 **Throughput Capacity Cost:**
@@ -599,10 +707,71 @@ FSxN to EC2 (same region): $0.00/GiB (free within VPC)
 Data transfer cost = $0/month
 ```
 
-**Total FSxN S3 Cost (with PostgreSQL storage):**
+**Total FSxN S3 Storage Cost (User Data Only):**
 ```
-$529.74 (storage) + $3,520.51 (throughput) + $0 (requests) + $0 (transfer) 
-= $4,050.25/month ≈ $4,051/month
+$518.00 (storage) + $3,520.51 (throughput) + $0 (requests) + $0 (transfer) 
+= $4,038.51/month ≈ $4,051/month
+```
+
+**PostgreSQL Coordinator Cost:**
+```
+See Cost Calculation 5: $575/month (FSxN-hosted deployment)
+```
+
+**Total Configuration C1 Cost:**
+```
+$4,051 (FSxN storage) + $575 (PostgreSQL coordinator) = $4,626/month
+```
+
+##### Configuration C2: FSxN Auto Tiering (Cost Optimized)
+
+**Storage Cost with Auto Tiering:**
+```
+Tiering policy: Auto (2-day cooling period)
+Expected data distribution:
+  - Hot data (20%): 3,600 GiB × 20% = 720 GiB on SSD
+  - Cold data (80%): 3,600 GiB × 80% = 2,880 GiB on capacity pool
+
+SSD storage cost: 720 GiB × $0.14/GiB = $100.80/month
+Capacity pool cost: 2,880 GiB × $0.0163/GiB = $46.94/month
+Kafka storage cost = $100.80 + $46.94 = $147.74/month
+```
+
+**PostgreSQL Storage (Additional):**
+```
+PostgreSQL database: 100 GiB (stored on FSxN SSD via NFS)
+SSD pricing: $0.14/GiB/month
+PostgreSQL storage cost = 100 GiB × $0.14 = $14.00/month
+
+Total storage cost = $147.74 (Kafka) + $14.00 (PostgreSQL) = $161.74/month
+```
+
+**Throughput Capacity Cost:**
+```
+Same as C1: $3,520.51/month (fixed regardless of tiering)
+```
+
+**Total FSxN S3 Storage Cost with Tiering (User Data Only):**
+```
+$161.74 (storage) + $3,520.51 (throughput) = $3,682.25/month ≈ $3,673/month
+```
+
+**PostgreSQL Coordinator Cost:**
+```
+See Cost Calculation 5: $575/month (FSxN-hosted deployment)
+```
+
+**Total Configuration C2 Cost:**
+```
+$3,673 (FSxN storage) + $575 (PostgreSQL coordinator) = $4,248/month
+```
+
+**Cost Savings Summary:**
+```
+C1 (SSD Only): $4,626/month
+C2 (Auto Tiering): $4,248/month
+Savings: $378/month (8% reduction)
+Storage cost reduction: $518 → $162 (71% reduction)
 ```
 
 ---
@@ -763,20 +932,23 @@ Savings: $1,510 - $575 = $935/month (62% reduction)
 
 ### Cost Summary Table
 
-| **Component** | **Classic Kafka** | **Diskless + S3 Standard** | **Diskless + S3 Express** | **Diskless + FSxN S3** |
-|--------------|------------------|---------------------------|--------------------------|------------------------|
-| **Storage** | $18,548 | $83 | $576 | $530 |
-| **Replication/Throughput** | $257,356 | — | — | $3,521 |
-| **Requests** | — | $5 | $14 | Included |
-| **Data Transfer** | Included above | $0 | $0 | $0 |
-| **PostgreSQL Coordinator** | — | $1,510 | $1,510 | **$575** |
-| **Subtotal (Storage & Coordinator)** | **$275,904** | **$1,598** | **$2,100** | **$4,626** |
-| **% of Classic** | 100% | **0.58%** | **0.76%** | **1.68%** |
+| **Component** | **Classic Kafka** | **Diskless + S3 Standard** | **Diskless + S3 Express** | **Diskless + FSxN (C1: SSD)** | **Diskless + FSxN (C2: Tiering)** |
+|--------------|------------------|---------------------------|--------------------------|-------------------------------|----------------------------------|
+| **Storage** | $18,548 | $83 | $576 | $518 | $162 |
+| **Replication/Throughput** | $257,356 | — | — | $3,521 | $3,521 |
+| **Requests** | — | $5 | $14 | Included | Included |
+| **Data Transfer** | Included above | $0 | $0 | $0 | $0 |
+| **PostgreSQL Coordinator** | — | $1,510 | $1,510 | **$575** | **$575** |
+| **Subtotal (Storage & Coordinator)** | **$275,904** | **$1,598** | **$2,100** | **$4,626** | **$4,248** |
+| **% of Classic** | 100% | **0.58%** | **0.76%** | **1.68%** | **1.54%** |
 
 **Updated Savings:**
-- **Diskless + S3 Standard**: 99.42% savings vs Classic Kafka
-- **Diskless + S3 Express**: 99.24% savings vs Classic Kafka  
-- **Diskless + FSxN S3**: 98.32% savings vs Classic Kafka (62% coordinator savings by hosting PostgreSQL on FSxN)
+- **Diskless + S3 Standard (Config A)**: 99.42% savings vs Classic Kafka
+- **Diskless + S3 Express (Config B)**: 99.24% savings vs Classic Kafka  
+- **Diskless + FSxN SSD Only (Config C1)**: 98.32% savings vs Classic Kafka
+- **Diskless + FSxN Auto Tiering (Config C2)**: 98.46% savings vs Classic Kafka (8% cheaper than C1)
+  - Storage cost reduction: 71% vs SSD-only ($518 → $162)
+  - Both FSxN configs achieve 62% coordinator savings by hosting PostgreSQL on FSxN
 
 **PostgreSQL Coordinator Deployment Options:**
 
@@ -814,9 +986,10 @@ See **Cost Calculation 5** above for detailed breakdown.
 
 **Question 2: What's the latency/cost efficiency sweet spot?**
 - Classic Kafka: Best latency, worst cost (baseline 100%)
-- S3 Standard: 13x slower, **99.97% cheaper**
-- S3 Express: Target 2x slower than Classic?, **99.86% cheaper**
-- FSxN: Target similar to Classic?, **98.54% cheaper**
+- S3 Standard: 13x slower, **99.42% cheaper**
+- S3 Express: Target 2x slower than Classic?, **99.24% cheaper**
+- FSxN SSD Only (C1): Target similar to Classic?, **98.32% cheaper**
+- FSxN Auto Tiering (C2): Target similar to Classic?, **98.46% cheaper** (8% better than C1)
 - Which trade-off makes sense for different workload types?
 
 **Question 3: What's the break-even point for S3 Express?**
@@ -826,10 +999,12 @@ See **Cost Calculation 5** above for detailed breakdown.
 - Need to find the crossover point (estimated at >10 GiB/s?)
 
 **Question 4: When does FSxN justify its cost?**
-- FSxN is 45x more expensive than S3 Standard, but still **98.54% cheaper than Classic Kafka**
+- FSxN (C1: SSD Only) is 2.9x more expensive than S3 Standard, but still **98.32% cheaper than Classic Kafka**
+- FSxN (C2: Auto Tiering) is 2.7x more expensive than S3 Standard, but still **98.46% cheaper than Classic Kafka**
 - Only justified if: Need near-Classic latency (<100ms) without Classic's replication costs
 - For Aiven's 1 GiB/s workload, likely not cost-effective
 - May be valuable for migrating latency-sensitive Classic Kafka workloads to Diskless
+- Auto tiering (C2) provides 8% cost savings while maintaining hot data performance
 
 **Question 5: What about operational complexity?**
 - Classic Kafka: Complex (disk management, rebalancing, multi-AZ replication)
@@ -874,6 +1049,11 @@ Based on benchmark results, we will provide a decision matrix:
 - Deploy test environments
 - Execute benchmark tests
 - Analyze and document results
+
+## Paul's clever ideas
+- Does diskless offer higher scalability w.r.t. num. partitions, replications vs throughput
+- Clarify the need of RF=3: for cheaper cross-AZ consumer reads
+- Client's (producer) performance (need to resend up to seconds of messages?), resource-constraint producers
 
 ## Future Work
 
