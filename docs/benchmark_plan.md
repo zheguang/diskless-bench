@@ -4,7 +4,7 @@
 
 This benchmark plan outlines the approach to evaluate the performance of Kafka Diskless topics using Aiven's Inkless implementation. The benchmark will compare performance between **AWS S3 Standard**, **AWS S3 Express One Zone**, and **NetApp FSxN S3** object storage backends.
 
-**Key Correction**: This benchmark is for **object storage** (S3-compatible), not traditional block/file storage. Kafka Diskless/Inkless stores log segments directly in S3-compatible object storage.
+**Note**: This benchmark is for **object storage** (S3-compatible), not traditional block/file storage. Kafka Diskless/Inkless stores log segments directly in S3-compatible object storage.
 
 ## Baseline Scenario
 
@@ -334,59 +334,88 @@ The primary goal is to **explore the cost/performance trade-off spectrum** for K
 
 ### Performance vs Cost Spectrum
 
-Based on the comparison of the three storage backends, we expect to map out a clear cost/performance trade-off spectrum:
+Based on the comparison of storage backends, we expect to map out a clear cost/performance trade-off spectrum:
 
-| **Storage** | **Monthly Cost (3.6 TiB)** | **Target End-to-End P50** | **Target End-to-End P99** | **Best For** |
-|-------------|---------------------------|---------------------------|---------------------------|--------------|
-| **S3 Standard** | **$89** (baseline) | ~650ms | ~1.5s | Cost-sensitive, long-term storage, proven at scale |
-| **S3 Express** | **$397** (~4.5x) | <300ms? | <800ms? | Latency-sensitive streaming, high request rates |
-| **FSxN S3** | **$4,024** (~45x) | <100ms? | <500ms? | Ultra-low latency, predictable performance, very high throughput |
+| **Storage** | **Monthly Cost (3.6 TiB)** | **Target End-to-End P50** | **Target End-to-End P99** | **Cost vs Classic** | **Best For** |
+|-------------|---------------------------|---------------------------|---------------------------|---------------------|--------------|
+| **Classic Kafka** | **$275,904** (baseline) | ~50ms | ~100ms | 1x (100%) | Ultra-low latency, traditional deployments |
+| **Diskless + S3 Standard** | **$89** | ~650ms | ~1.5s | **0.03% (99.97% savings)** | Cost-sensitive, proven at scale |
+| **Diskless + S3 Express** | **$397** | <300ms? | <800ms? | **0.14% (99.86% savings)** | Latency-sensitive streaming |
+| **Diskless + FSxN S3** | **$4,024** | <100ms? | <500ms? | **1.46% (98.54% savings)** | Ultra-low latency, predictable performance |
+
+**Notes:**
+- **Classic Kafka cost breakdown** (from Aiven blog for 1 GiB/s, 3-AZ, RF=3):
+  - Cross-AZ replication: $257,356/month (3 GiB/s egress × 2 zones × 730 hrs × $0.02/GB)
+  - Disk costs: $18,548/month (for local SSD storage across 9+ brokers)
+  - **Total storage-related: $275,904/month** (this excludes compute costs)
+  - **Annual**: $3.31M/year
+- **Diskless costs** include only object storage and requests (excludes PostgreSQL coordinator and compute)
+- Classic Kafka latency is much lower but at 3,100x the storage/networking cost
+- Even FSxN (most expensive Diskless option) is **98.54% cheaper** than Classic Kafka
 
 ### Research Outcomes
 
 **Question 1: Does faster object storage translate to faster Kafka?**
-- If S3 Express (10x faster S3 ops) only reduces end-to-end latency by 2x, it may not justify 4.5x cost
-- Need to measure how much of the 650ms P50 is S3 latency vs Kafka processing/batching
+- Classic Kafka achieves ~50ms P50 with local disks
+- S3 Standard Diskless adds ~600ms (650ms total) with 99.97% cost savings
+- If S3 Express (10x faster S3 ops) only reduces end-to-end latency by 2x (to ~325ms), is 4.5x cost increase justified?
+- Need to measure how much of the 650ms P50 is S3 latency vs Kafka processing/batching/coordinator
 
-**Question 2: What's the break-even point for S3 Express?**
-- S3 Express has cheaper requests (80% lower GET cost) but 5x storage cost
+**Question 2: What's the latency/cost efficiency sweet spot?**
+- Classic Kafka: Best latency, worst cost (baseline 100%)
+- S3 Standard: 13x slower, **99.97% cheaper**
+- S3 Express: Target 2x slower than Classic?, **99.86% cheaper**
+- FSxN: Target similar to Classic?, **98.54% cheaper**
+- Which trade-off makes sense for different workload types?
+
+**Question 3: What's the break-even point for S3 Express?**
+- S3 Express has cheaper requests (80% lower GET cost) but 5x storage cost vs S3 Standard
 - At low throughput: Storage cost dominates → S3 Standard wins
 - At very high throughput: Request cost dominates → S3 Express may win
-- Need to find the crossover point
+- Need to find the crossover point (estimated at >10 GiB/s?)
 
-**Question 3: When does FSxN justify its cost?**
-- FSxN is 45x more expensive than S3 Standard
-- Only justified if: Ultra-low latency requirement (<100ms) OR very high throughput (>5 GiB/s)
+**Question 4: When does FSxN justify its cost?**
+- FSxN is 45x more expensive than S3 Standard, but still **98.54% cheaper than Classic Kafka**
+- Only justified if: Need near-Classic latency (<100ms) without Classic's replication costs
 - For Aiven's 1 GiB/s workload, likely not cost-effective
-- May be valuable for specific use cases (real-time analytics, fraud detection)
+- May be valuable for migrating latency-sensitive Classic Kafka workloads to Diskless
 
-**Question 4: What about operational complexity?**
-- S3 Standard: Simplest (fully managed, auto-scaling)
+**Question 5: What about operational complexity?**
+- Classic Kafka: Complex (disk management, rebalancing, multi-AZ replication)
+- S3 Standard: Simplest Diskless option (fully managed, auto-scaling)
 - S3 Express: Simple but single-AZ (availability trade-off)
-- FSxN: Most complex (capacity planning, monitoring, provisioning)
+- FSxN: More complex (capacity planning, monitoring, provisioning)
 
 ### Recommendations Framework
 
 Based on benchmark results, we will provide a decision matrix:
 
-**Choose S3 Standard if:**
-- Cost is primary concern (proven 94% savings)
+**Choose Classic Kafka if:**
+- Latency requirement is <100ms P50
+- Cannot tolerate any latency increase
+- Already have optimized Classic Kafka infrastructure
+- Cost is not primary concern
+
+**Choose Diskless + S3 Standard if:**
+- Cost is primary concern (proven 99.97% savings vs Classic)
 - Latency requirement is >500ms P50
 - Workload is write-heavy or has low read fan-out
 - Long-term data retention (cold storage)
+- **Most common choice for new Diskless deployments**
 
-**Choose S3 Express if:**
-- Latency requirement is <500ms P50
+**Choose Diskless + S3 Express if:**
+- Latency requirement is <500ms P50 but >100ms acceptable
 - High consumer fan-out (request cost matters)
 - Workload has frequent consumer catch-up scenarios
 - Single-AZ deployment acceptable
+- Budget allows 4.5x storage cost vs S3 Standard (still 99.86% cheaper than Classic)
 
-**Choose FSxN S3 if:**
-- Latency requirement is <100ms P50
-- Very high throughput (>5 GiB/s)
+**Choose Diskless + FSxN S3 if:**
+- Migrating from Classic Kafka but need similar latency (<100ms P50)
+- Very high throughput (>5 GiB/s) where fixed capacity cost amortizes
 - Need predictable performance (no cloud variability)
-- Budget allows for 45x cost premium
 - Can leverage compression/deduplication for additional savings
+- Budget allows 45x cost vs S3 Standard (still 98.54% cheaper than Classic)
 
 ## Next Steps
 
